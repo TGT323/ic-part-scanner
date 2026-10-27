@@ -1,0 +1,440 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>IC Part Number Scanner</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#101827;color:#f3f6fc;font-family:Arial,sans-serif}
+header{padding:17px;text-align:center;background:#1c2940}
+h1{font-size:22px;margin:0 0 6px}
+small,.hint{color:#b7c5da}
+main{max-width:700px;margin:auto;padding:12px}
+.panel{background:#1c2940;border-radius:13px;padding:14px;margin-bottom:12px}
+.camera{position:relative;background:#080c13;border-radius:12px;overflow:hidden}
+video{display:block;width:100%;max-height:55vh;object-fit:contain}
+.target{position:absolute;left:12%;top:32%;width:76%;height:36%;border:2px solid #52f6a4;pointer-events:none}
+.target:after{content:"PLACE ONE IC HERE";position:absolute;top:-25px;left:0;color:#52f6a4;font-size:12px}
+button,input,select{font:inherit;border-radius:9px;padding:11px}
+button{border:0;background:#3478ee;color:white;font-weight:bold;cursor:pointer}
+button:disabled{opacity:.45}
+button.secondary{background:#40536f}
+button.green{background:#16865a}
+button.red{background:#9b3949}
+.controls{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+input{width:100%;background:#0e1929;color:white;border:1px solid #5b708c}
+label{display:block;font-size:13px;margin:9px 0 5px;color:#c4d1e5}
+#status{color:#f7d77b;font-size:14px;min-height:20px;margin-top:10px}
+#candidate{font-size:25px;font-weight:bold;letter-spacing:1px;color:#58f5ac;word-break:break-all}
+.stats{display:flex;justify-content:space-between;align-items:center}
+.count{font-size:30px;font-weight:bold}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:9px 5px;border-bottom:1px solid #40516a;text-align:left;word-break:break-word}
+th:last-child,td:last-child{text-align:right}
+.scroll{max-height:260px;overflow:auto}
+.note{font-size:12px;color:#bdcce0;line-height:1.6}
+</style>
+</head>
+<body>
+<header>
+<h1>IC Part Number Scanner</h1>
+<small>iPhone Continuous IC Recognition</small>
+</header>
+<main>
+<section class="panel">
+<div class="camera">
+<video id="video" autoplay muted playsinline></video>
+<div class="target"></div>
+</div>
+<div class="controls">
+<button id="startBtn">Start Camera</button>
+<button id="stopBtn" class="secondary">Stop Camera</button>
+<button id="torchBtn" class="secondary">Light On / Off</button>
+<button id="scanBtn" class="secondary">Scan Now</button>
+</div>
+<label>Camera zoom (if supported)</label>
+<input id="zoom" type="range" min="1" max="1" step=".1" value="1" disabled>
+<div id="status">Ready. Tap Start Camera.</div>
+</section>
+
+<section class="panel">
+<label>Recognized Part Number</label>
+<div id="candidate">---</div>
+<label>Edit / confirm Part Number</label>
+<input id="partInput" placeholder="Example: TPS54331">
+<div class="controls">
+<button id="addBtn" class="green">Confirm +1</button>
+<button id="undoBtn" class="secondary">Undo Last</button>
+</div>
+<p class="note">Verify the part number before confirming. Lot codes and date codes may look similar.</p>
+</section>
+
+<section class="panel">
+<div class="stats">
+<strong>Total IC Count</strong>
+<span class="count" id="total">0</span>
+</div>
+<div class="controls">
+<button id="exportBtn">Export CSV</button>
+<button id="clearBtn" class="red">Clear All</button>
+</div>
+</section>
+
+<section class="panel">
+<h3>Part Number Summary</h3>
+<div class="scroll">
+<table>
+<thead><tr><th>Part Number</th><th>Qty</th></tr></thead>
+<tbody id="summary"></tbody>
+</table>
+</div>
+</section>
+
+<section class="panel">
+<h3>Scan History</h3>
+<div class="scroll">
+<table>
+<thead><tr><th>Time</th><th>Part Number</th></tr></thead>
+<tbody id="history"></tbody>
+</table>
+</div>
+</section>
+<p class="note">
+For best results: use good lighting, hold the iPhone steady,
+place one IC inside the green box and keep the marking horizontal.
+This scanner runs OCR in your browser. It does not upload images
+to a server, but downloads OCR libraries and language data online.
+</p>
+</main>
+
+<canvas id="canvas" style="display:none"></canvas>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script>
+"use strict";
+
+const $ = id => document.getElementById(id);
+const video = $("video");
+const canvas = $("canvas");
+const ctx = canvas.getContext("2d", {willReadFrequently:true});
+
+let stream = null;
+let track = null;
+let worker = null;
+let running = false;
+let busy = false;
+let timer = null;
+let torchOn = false;
+let lastCandidate = "";
+let records = [];
+
+try {
+  const saved = JSON.parse(localStorage.getItem("icScannerRecords") || "[]");
+  if (Array.isArray(saved)) records = saved;
+} catch(e) {}
+
+function status(message) {
+  $("status").textContent = message;
+}
+
+function normalize(text) {
+  return String(text || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9-]/g, "")
+    .trim();
+}
+
+function candidatesFromText(text) {
+  const lines = String(text || "")
+    .toUpperCase()
+    .split(/\r?\n/)
+    .map(s => s.replace(/[^A-Z0-9 -]/g, " ").trim())
+    .filter(Boolean);
+
+  let list = [];
+  for (const line of lines) {
+    for (const raw of line.split(/\s+/)) {
+      const p = normalize(raw);
+      if (
+        p.length >= 4 &&
+        p.length <= 28 &&
+        /[A-Z]/.test(p) &&
+        /[0-9]/.test(p) &&
+        !/^(LOT|DATE|CODE|MADE|ROHS)/.test(p)
+      ) {
+        list.push(p);
+      }
+    }
+  }
+  return [...new Set(list)];
+}
+
+async function initOCR() {
+  if (worker) return;
+  if (typeof Tesseract === "undefined") {
+    throw new Error("OCR library could not load. Check internet connection.");
+  }
+  status("Loading English OCR engine...");
+  worker = await Tesseract.createWorker("eng");
+  await worker.setParameters({
+    tessedit_pageseg_mode: "6",
+    preserve_interword_spaces: "1"
+  });
+}
+
+async function startCamera() {
+  if (running) return;
+  if (!navigator.mediaDevices?.getUserMedia) {
+    status("Camera unavailable. Open this page with HTTPS in Safari.");
+    return;
+  }
+
+  try {
+    status("Opening camera...");
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio:false,
+      video:{
+        facingMode:{ideal:"environment"},
+        width:{ideal:1920},
+        height:{ideal:1080}
+      }
+    });
+    video.srcObject = stream;
+    await video.play();
+    track = stream.getVideoTracks()[0];
+    running = true;
+    $("startBtn").disabled = true;
+
+    const capabilities = track.getCapabilities?.() || {};
+    if (capabilities.zoom) {
+      const z = $("zoom");
+      z.min = capabilities.zoom.min;
+      z.max = capabilities.zoom.max;
+      z.step = capabilities.zoom.step || 0.1;
+      z.value = track.getSettings().zoom || capabilities.zoom.min;
+      z.disabled = false;
+    }
+
+    status("Camera ready. Loading OCR...");
+    try {
+      await initOCR();
+      status("Scanning... Place one IC inside the green box.");
+      timer = setInterval(scanFrame, 2400);
+      await scanFrame();
+    } catch(e) {
+      status("Camera works, but OCR failed: " + e.message);
+    }
+  } catch(e) {
+    status("Camera error: " + e.message);
+    stopCamera();
+  }
+}
+
+function stopCamera() {
+  running = false;
+  if (timer) clearInterval(timer);
+  timer = null;
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = null;
+  track = null;
+  video.srcObject = null;
+  $("startBtn").disabled = false;
+  $("zoom").disabled = true;
+  status("Camera stopped.");
+}
+
+async function scanFrame() {
+  if (!running || !worker || busy || video.readyState < 2) return;
+  busy = true;
+  try {
+    const w = video.videoWidth;
+    const h = video.videoHeight;
+    if (!w || !h) return;
+
+    // Center crop: the same approximate area as the green guide.
+    const sx = Math.round(w * 0.12);
+    const sy = Math.round(h * 0.32);
+    const sw = Math.round(w * 0.76);
+    const sh = Math.round(h * 0.36);
+
+    // Upscale the selected region to assist OCR.
+    const scale = Math.min(2, 2200 / sw);
+    canvas.width = Math.round(sw * scale);
+    canvas.height = Math.round(sh * scale);
+
+    ctx.fillStyle = "white";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.filter = "grayscale(1) contrast(1.7)";
+    ctx.drawImage(video,sx,sy,sw,sh,0,0,canvas.width,canvas.height);
+    ctx.filter = "none";
+
+    const result = await worker.recognize(canvas);
+    const found = candidatesFromText(result.data.text);
+
+    if (found.length) {
+      const part = found[0];
+      $("candidate").textContent = part;
+      if (
+        !$("partInput").matches(":focus") &&
+        (part !== lastCandidate || !$("partInput").value)
+      ) {
+        $("partInput").value = part;
+      }
+      lastCandidate = part;
+      status("Candidate found. Check the number, then tap Confirm +1.");
+    } else {
+      $("candidate").textContent = "---";
+      lastCandidate = "";
+      status("No clear part number. Adjust light, distance or angle.");
+    }
+  } catch(e) {
+    status("OCR error: " + e.message);
+  } finally {
+    busy = false;
+  }
+}
+
+function saveRecords() {
+  try {
+    localStorage.setItem("icScannerRecords",JSON.stringify(records));
+  } catch(e) {
+    status("Storage unavailable. Export your results before closing.");
+  }
+}
+
+function addRecord() {
+  const part = normalize($("partInput").value);
+  if (!part) {
+    status("Enter or scan a part number first.");
+    return;
+  }
+  records.push({part,time:new Date().toISOString()});
+  saveRecords();
+  render();
+  status("Added: " + part + " (+1). Replace IC or scan again.");
+}
+
+function render() {
+  $("total").textContent = records.length;
+  const counts = {};
+  for (const r of records) {
+    counts[r.part] = (counts[r.part] || 0) + 1;
+  }
+
+  $("summary").replaceChildren();
+  Object.entries(counts)
+    .sort((a,b)=>a[0].localeCompare(b[0]))
+    .forEach(([part,qty])=>{
+      const tr=document.createElement("tr");
+      for(const value of [part,qty]){
+        const td=document.createElement("td");
+        td.textContent=value;
+        tr.appendChild(td);
+      }
+      $("summary").appendChild(tr);
+    });
+
+  $("history").replaceChildren();
+  records.slice(-100).reverse().forEach(r=>{
+    const tr=document.createElement("tr");
+    for(const value of [
+      new Date(r.time).toLocaleString(),
+      r.part
+    ]){
+      const td=document.createElement("td");
+      td.textContent=value;
+      tr.appendChild(td);
+    }
+    $("history").appendChild(tr);
+  });
+}
+
+function csvCell(value) {
+  return '"' + String(value).replace(/"/g,'""') + '"';
+}
+
+function exportCSV() {
+  if (!records.length) {
+    status("No records to export.");
+    return;
+  }
+  const counts={};
+  records.forEach(r=>counts[r.part]=(counts[r.part]||0)+1);
+  const lines=[
+    ["Part Number","Qty"],
+    ...Object.entries(counts).sort().map(([p,q])=>[p,q]),
+    [],
+    ["Scan Time","Part Number"],
+    ...records.map(r=>[new Date(r.time).toLocaleString(),r.part])
+  ];
+  const csv="\uFEFF"+lines.map(row=>row.map(csvCell).join(",")).join("\r\n");
+  const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;
+  a.download="IC_Scanner_"+new Date().toISOString().slice(0,10)+".csv";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),30000);
+  status("CSV exported. Open it with Excel.");
+}
+
+$("startBtn").onclick=startCamera;
+$("stopBtn").onclick=stopCamera;
+$("scanBtn").onclick=async()=>{
+  if(!running){status("Start the camera first.");return;}
+  await scanFrame();
+};
+$("addBtn").onclick=addRecord;
+$("undoBtn").onclick=()=>{
+  if(!records.length)return;
+  records.pop();
+  saveRecords();
+  render();
+  status("Last record removed.");
+};
+$("clearBtn").onclick=()=>{
+  if(!confirm("Delete all saved scan records?"))return;
+  records=[];
+  saveRecords();
+  render();
+  status("All records cleared.");
+};
+$("exportBtn").onclick=exportCSV;
+
+$("torchBtn").onclick=async()=>{
+  if(!track){status("Start the camera first.");return;}
+  const caps=track.getCapabilities?.() || {};
+  if(!caps.torch){
+    status("Torch control is not supported by this camera/browser.");
+    return;
+  }
+  try {
+    torchOn=!torchOn;
+    await track.applyConstraints({advanced:[{torch:torchOn}]});
+    status(torchOn?"Light on.":"Light off.");
+  } catch(e) {
+    torchOn=false;
+    status("Cannot control torch: "+e.message);
+  }
+};
+
+$("zoom").oninput=async()=>{
+  if(!track)return;
+  try {
+    await track.applyConstraints({
+      advanced:[{zoom:Number($("zoom").value)}]
+    });
+  } catch(e) {
+    status("Zoom not supported: "+e.message);
+  }
+};
+
+window.addEventListener("pagehide",stopCamera);
+render();
+</script>
+</body>
+</html>
