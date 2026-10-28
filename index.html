@@ -1,38 +1,383 @@
+
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>TGT IC Scanner V3</title>
-<style>*{box-sizing:border-box}body{margin:0;background:#101827;color:#eef4ff;font:16px Arial,sans-serif}header{padding:16px;text-align:center;background:#1d2a42}h2{margin:0}main{max-width:700px;margin:auto;padding:12px}section{background:#1d2a42;padding:14px;border-radius:12px;margin-bottom:12px}.camera{position:relative;background:#000}video{width:100%;display:block;border-radius:8px}.guide{position:absolute;left:10%;top:30%;width:80%;height:40%;border:2px solid #49f5a5;pointer-events:none}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}button,input,select{font-size:16px;border-radius:8px;padding:11px;max-width:100%}button{background:#3479ed;color:#fff;border:0;font-weight:bold}button.secondary{background:#465d7c}button.green{background:#16865a}button:disabled{opacity:.5}input,select{background:#0d1728;color:white;border:1px solid #6c84a6;width:100%}label{display:block;margin:12px 0 6px;color:#bfd1e9}small,.muted{color:#b9c8dd}#status{color:#ffd16c;margin-top:12px;min-height:24px}#best{color:#49f5a5;font-size:24px;font-weight:bold;overflow-wrap:anywhere}#candidates button{margin:4px;background:#465d7c}table{width:100%;border-collapse:collapse;font-size:14px}td,th{border-bottom:1px solid #44536b;padding:8px;text-align:left;overflow-wrap:anywhere}.pill{padding:6px 9px;background:#324a69;border-radius:8px;display:inline-block}#history{max-height:230px;overflow:auto}#photo{display:none;width:100%;margin-top:8px}</style>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script></head><body><header><h2>TGT IC Part Scanner V3</h2><small>OCR + Mouser verification + safe auto count</small></header><main>
-<section><div class="camera"><video id="video" autoplay muted playsinline></video><div class="guide"></div></div><div class="grid"><button id="start">Start Camera</button><button id="stop" class="secondary">Stop</button><button id="scan">Scan Now</button><button id="torch" class="secondary">Light On / Off</button></div><label>Camera Zoom</label><input id="zoom" type="range" min="1" max="1" step="0.1" value="1" disabled><label>Text Rotation</label><select id="rotation"><option value="0">Normal (0°)</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select><label><input type="checkbox" id="auto" style="width:auto" checked> Automatic verified counting</label><div class="muted">For auto counting, remove each chip from the green box before placing the next one.</div><div id="status">Ready. Start camera to scan.</div></section>
-<section><div class="muted">Best verified candidate</div><div id="best">—</div><div id="verification" class="muted">Waiting for scan</div><div id="candidates"></div><label>Confirm / correct Part Number</label><input id="part" placeholder="Enter part number"><label>Brand (optional)</label><input id="brand" placeholder="Manufacturer / brand"><div class="grid"><button id="verify">Verify on Mouser</button><button id="confirm" class="green">Confirm +1</button><button id="undo" class="secondary">Undo Last</button><button id="export">Export CSV</button></div><p class="muted">Auto count requires exact Mouser match and repeated stable OCR. A database match does not prove that the marking belongs to this chip.</p></section>
-<section><div class="grid"><div class="pill">Total: <strong id="total">0</strong></div><button id="clear" class="secondary">Clear All</button></div><h3>Count by Part Number</h3><table><thead><tr><th>Part Number</th><th>Brand</th><th>Qty</th></tr></thead><tbody id="summary"></tbody></table><h3>Recent History</h3><div id="history"></div></section>
-</main><canvas id="canvas" hidden></canvas>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TGT IC Scanner V3.1</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#101827;color:#eef4ff;font:15px Arial,sans-serif}
+header{background:#1c2a42;text-align:center;padding:15px}
+h2{margin:0 0 6px}small{color:#a9bedb}
+main{max-width:750px;margin:auto;padding:12px}
+section{background:#1c2a42;border-radius:12px;padding:13px;margin-bottom:12px}
+.camera{position:relative;background:#000;border-radius:10px;overflow:hidden}
+video{display:block;width:100%;max-height:360px;object-fit:contain}
+.guide{position:absolute;left:9%;top:28%;width:82%;height:44%;border:2px solid #4be0a5;pointer-events:none}
+.grid{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+button{background:#2879df;color:white;border:0;border-radius:8px;padding:12px;cursor:pointer;font-weight:bold}
+button.secondary{background:#43536c}
+button.danger{background:#a73542}
+button:disabled{opacity:.5}
+input{background:#0d1626;color:white;border:1px solid #5b7190;border-radius:7px;padding:10px;width:100%;margin:5px 0 10px}
+label{display:block;color:#b9c9df;margin-top:8px}
+#status{color:#80e7bb;min-height:20px;overflow-wrap:anywhere}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0d1626;padding:10px;border-radius:8px;max-height:170px;overflow:auto}
+table{border-collapse:collapse;width:100%;font-size:13px}
+td,th{padding:9px 5px;border-bottom:1px solid #45546b;text-align:left;overflow-wrap:anywhere}
+.pill{background:#0d1626;border-radius:8px;padding:12px}
+#suggestions button{margin:3px;background:#405f8d}
+</style>
+</head>
+<body>
+<header>
+<h2>TGT IC Part Scanner V3.1</h2>
+<small>OCR · Samsung / SanDisk · Counting · CSV</small>
+</header>
+<main>
+<section>
+<div class="camera">
+<video id="video" autoplay muted playsinline></video>
+<div class="guide"></div>
+</div>
+<div class="grid">
+<button id="start">Start Camera</button>
+<button id="scan">SCAN NOW</button>
+<button id="stop" class="secondary">Stop Camera</button>
+</div>
+<div class="grid">
+<button id="next" class="secondary">Next Chip</button>
+<button id="auto" class="secondary">Auto: OFF</button>
+<button id="torch" class="secondary">Flashlight</button>
+</div>
+<label>Camera Zoom</label>
+<input id="zoom" type="range" min="1" max="3" step=".1" value="1">
+<p id="status">Ready. Start camera first.</p>
+</section>
+
+<section>
+<h3>OCR Result</h3>
+<pre id="raw">Waiting for scan...</pre>
+<div id="suggestions"></div>
+<label>Brand</label>
+<input id="brand" placeholder="SAMSUNG / SANDISK">
+<label>Part Number / Marking</label>
+<input id="part" placeholder="S4LN058A01-8030 / 060681">
+<label>Capacity</label>
+<input id="capacity" placeholder="256G (if present)">
+<div class="grid">
+<button id="add">Confirm &amp; Add +1</button>
+<button id="verify" class="secondary">Check Mouser</button>
+</div>
+<p id="verification"></p>
+</section>
+
+<section>
+<div class="pill">Total Quantity: <strong id="total">0</strong></div>
+<h3>Count by Part</h3>
+<div style="overflow-x:auto">
+<table>
+<thead><tr><th>Brand</th><th>Part Number</th><th>Capacity</th><th>Qty</th></tr></thead>
+<tbody id="rows"></tbody>
+</table>
+</div>
+<div class="grid">
+<button id="export">Export CSV</button>
+<button id="undo" class="secondary">Undo Last</button>
+<button id="clear" class="danger">Clear All</button>
+</div>
+</section>
+</main>
+<canvas id="canvas" hidden></canvas>
 <script>
-'use strict';
-const WORKER='https://tgt-ic-lookup.tgreentech323.workers.dev';
+"use strict";
+
+const WORKER="https://tgt-ic-lookup.tgreentech323.workers.dev";
 const $=id=>document.getElementById(id);
-let stream=null,track=null,ocr=null,busy=false,timer=null,records=[],lastRecord=null;
-let lastStable='',stableCount=0,armed=true,emptyFrames=0,autoLock=false,verifiedPart='',verifiedBrand='';
-const MAX_LOOKUPS=4;
-try{records=JSON.parse(localStorage.getItem('tgt_ic_v3_records')||'[]');if(!Array.isArray(records))records=[];}catch{records=[];}
-const status=t=>$('status').textContent=t;
-function save(){localStorage.setItem('tgt_ic_v3_records',JSON.stringify(records));render();}
-function render(){let grouped=new Map();for(const r of records){let k=r.part+'|'+r.brand;if(!grouped.has(k))grouped.set(k,{part:r.part,brand:r.brand,qty:0});grouped.get(k).qty++;}$('total').textContent=records.length;$('summary').replaceChildren();for(const r of grouped.values()){let tr=document.createElement('tr');for(const v of [r.part,r.brand,r.qty]){let td=document.createElement('td');td.textContent=v;tr.append(td)}$('summary').append(tr)}$('history').replaceChildren();for(const r of records.slice(-30).reverse()){let d=document.createElement('div');d.style.padding='5px';d.textContent=`${r.time}  ${r.part}  ${r.brand}  (${r.source})`;$('history').append(d)}}render();
-function norm(s){return String(s||'').toUpperCase().replace(/[^A-Z0-9._/-]/g,'').slice(0,50)}
-function record(part,brand,source){part=norm(part);if(!part)return;let r={part,brand:String(brand||'').trim().slice(0,70),time:new Date().toLocaleString(),source};records.push(r);lastRecord=r;save();status('Counted +1: '+part)}
-function resetStability(){lastStable='';stableCount=0;verifiedPart='';verifiedBrand='';$('best').textContent='—';$('verification').textContent='Waiting for scan';$('candidates').replaceChildren();}
-async function start(){if(stream)return;try{stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}});$('video').srcObject=stream;await $('video').play();track=stream.getVideoTracks()[0];const caps=track.getCapabilities?.()||{};if(caps.zoom){$('zoom').disabled=false;$('zoom').min=caps.zoom.min;$('zoom').max=caps.zoom.max;$('zoom').step=caps.zoom.step||0.1;$('zoom').value=track.getSettings().zoom||caps.zoom.min;}status('Camera started. Loading OCR...');if(!ocr)ocr=await Tesseract.createWorker('eng');await ocr.setParameters({tessedit_pageseg_mode:'6',preserve_interword_spaces:'1'});status('Ready. Keep one chip centered in green box.');timer=setInterval(()=>scan(false),3500);}catch(e){status('Camera/OCR error: '+e.message);stop();}}
-function stop(){clearInterval(timer);timer=null;stream?.getTracks().forEach(t=>t.stop());stream=null;track=null;$('video').srcObject=null;status('Stopped')}
-$('start').onclick=start;$('stop').onclick=stop;$('scan').onclick=()=>scan(true);
-$('zoom').oninput=async e=>{if(track)try{await track.applyConstraints({advanced:[{zoom:Number(e.target.value)}]})}catch{status('Zoom unsupported')}};
-$('torch').onclick=async()=>{if(!track)return;try{let on=!!track.getSettings().torch;await track.applyConstraints({advanced:[{torch:!on}]})}catch{status('Torch not supported on this camera')}};
-function frame(){const v=$('video');if(!v.videoWidth)return null;const c=$('canvas');let sx=Math.floor(v.videoWidth*.10),sy=Math.floor(v.videoHeight*.30),sw=Math.floor(v.videoWidth*.80),sh=Math.floor(v.videoHeight*.40);let scale=Math.min(2.5,2200/sw);c.width=Math.round(sw*scale);c.height=Math.round(sh*scale);const x=c.getContext('2d',{willReadFrequently:true});x.filter='grayscale(1) contrast(2.1)';x.drawImage(v,sx,sy,sw,sh,0,0,c.width,c.height);x.filter='none';let angle=Number($('rotation').value);if(!angle)return c;let out=document.createElement('canvas');out.width=angle%180?c.height:c.width;out.height=angle%180?c.width:c.height;let ctx=out.getContext('2d');ctx.translate(out.width/2,out.height/2);ctx.rotate(angle*Math.PI/180);ctx.drawImage(c,-c.width/2,-c.height/2);return out;}
-function candidates(text){const lines=String(text||'').toUpperCase().split(/\r?\n/).map(s=>s.replace(/[^A-Z0-9._/ -]/g,' ').trim()).filter(Boolean);let result=[];for(let i=0;i<lines.length;i++){let line=lines[i];for(let token of line.split(/\s+/)){let p=norm(token);if(p.length<3||p.length>40||!/[0-9]/.test(p)||!/^[A-Z0-9]/.test(p))continue;if(/^(MALAYSIA|CHINA|TAIWAN|SANDISK|DATE|LOT|ROHS|MADE|ASSEMBLED)$/.test(p))continue;let score=(/[A-Z]/.test(p)?3:0)+(p.length>=6?2:0)+(i===1?1:0)-(p.length>25?2:0);result.push({p,score});}}let unique=new Map();for(let r of result)if(!unique.has(r.p)||unique.get(r.p)<r.score)unique.set(r.p,r.score);return [...unique].sort((a,b)=>b[1]-a[1]).slice(0,MAX_LOOKUPS).map(([p])=>p);}
-async function lookup(part){const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),7000);try{const res=await fetch(WORKER+'/lookup?part='+encodeURIComponent(part),{signal:controller.signal});const data=await res.json();if(!res.ok)throw Error(data.error||'HTTP '+res.status);const exact=(data.matches||[]).find(m=>norm(m.manufacturerPartNumber)===norm(part));return {exact:!!exact,match:exact||null,results:data.matches||[]};}finally{clearTimeout(timeout)}}
-async function scan(manual){if(busy||!stream||!ocr)return;busy=true;try{status('Analyzing IC marking...');let img=frame();if(!img)return;let {data}=await ocr.recognize(img);let list=candidates(data.text);$('candidates').replaceChildren();for(let p of list){let b=document.createElement('button');b.textContent=p;b.onclick=()=>{$('part').value=p;verifiedPart='';$('verification').textContent='Selected OCR candidate; verify before counting.'};$('candidates').append(b)}if(!list.length){emptyFrames++;stableCount=0;lastStable='';if(emptyFrames>=2){armed=true;autoLock=false;resetStability();}status('No candidate detected. Move closer / adjust light.');return;}emptyFrames=0;let found=null;for(let p of list){try{let r=await lookup(p);if(r.exact){found={part:r.match.manufacturerPartNumber,brand:r.match.manufacturer};break;}}catch(e){status('Mouser lookup unavailable: '+e.message);break;}}if(!found){stableCount=0;lastStable='';verifiedPart='';$('best').textContent=list[0];$('part').value=list[0];$('verification').textContent='Unverified — manual confirmation required';status('No exact Mouser match. Check the part number manually.');return;}let pn=norm(found.part);$('best').textContent=pn;$('part').value=pn;$('brand').value=found.brand;verifiedPart=pn;verifiedBrand=found.brand;$('verification').textContent='Exact Mouser match: '+found.brand;if(lastStable===pn)stableCount++;else{lastStable=pn;stableCount=1;}if($('auto').checked&&armed&&!autoLock&&stableCount>=2){record(pn,found.brand,'auto verified');armed=false;autoLock=true;status('Auto counted +1. REMOVE chip from green box before next chip.')}else status(armed?'Verified ('+stableCount+'/2 stable scans).':'Chip already counted. Remove chip to re-arm.');}catch(e){status('Scan error: '+e.message)}finally{busy=false}}
-$('verify').onclick=async()=>{let p=norm($('part').value);if(!p)return;status('Checking Mouser...');try{let r=await lookup(p);if(r.exact){verifiedPart=p;verifiedBrand=r.match.manufacturer;$('brand').value=verifiedBrand;$('best').textContent=p;$('verification').textContent='Exact Mouser match';status('Verified: '+p)}else{verifiedPart='';$('verification').textContent='No exact Mouser match';status('Not verified. Manual confirm still possible.')}}catch(e){status('Lookup error: '+e.message)}};
-$('confirm').onclick=()=>{let p=norm($('part').value);if(!p){status('Enter a Part Number first');return;}record(p,$('brand').value,verifiedPart===p?'manual verified':'manual unverified');armed=false;autoLock=true;stableCount=0;status('Counted +1 manually. Remove chip before next automatic scan.')};
-$('undo').onclick=()=>{if(records.length){records.pop();save();status('Last count removed')}};
-$('clear').onclick=()=>{if(confirm('Delete ALL saved scan records?')){records=[];save();status('All records cleared')}};
-$('export').onclick=()=>{let rows=[['Time','Brand','Part Number','Quantity','Source'],...records.map(r=>[r.time,r.brand,r.part,1,r.source])];let csv='\ufeff'+rows.map(row=>row.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\r\n');let url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));let a=document.createElement('a');a.href=url;a.download='TGT_IC_Scanner_V3_'+new Date().toISOString().slice(0,10)+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),5000)};
-window.addEventListener('pagehide',stop);
-</script></body></html>
+const KEY="tgt_ic_v31_records";
+let records=[];
+try{records=JSON.parse(localStorage.getItem(KEY)||"[]");if(!Array.isArray(records))records=[]}catch(e){records=[]}
+
+let stream=null,track=null,worker=null,busy=false,auto=false;
+let timer=null,armed=true,lastText="",emptyCount=0;
+let lastAdded=null,zoomValue=1;
+const status=t=>$("status").textContent=t;
+
+function normalize(s){
+ return String(s||"").toUpperCase().replace(/[^A-Z0-9\-]/g,"");
+}
+function save(){
+ localStorage.setItem(KEY,JSON.stringify(records));
+ render();
+}
+function render(){
+ const grouped=new Map();
+ records.forEach(r=>{
+  const key=[r.brand,r.part,r.capacity].join("|");
+  if(!grouped.has(key))grouped.set(key,{...r,qty:0});
+  grouped.get(key).qty++;
+ });
+ $("total").textContent=records.length;
+ $("rows").innerHTML="";
+ for(const r of grouped.values()){
+  const tr=document.createElement("tr");
+  [r.brand,r.part,r.capacity||"—",r.qty].forEach(v=>{
+   const td=document.createElement("td");
+   td.textContent=v;
+   tr.appendChild(td);
+  });
+  $("rows").appendChild(tr);
+ }
+}
+
+async function startCamera(){
+ try{
+  if(stream){status("Camera already running.");return}
+  stream=await navigator.mediaDevices.getUserMedia({
+   audio:false,
+   video:{facingMode:{ideal:"environment"},width:{ideal:1920},height:{ideal:1080}}
+  });
+  $("video").srcObject=stream;
+  await $("video").play();
+  track=stream.getVideoTracks()[0];
+  status("Camera ready. Position IC in green frame, then press SCAN NOW.");
+ }catch(e){
+  status("Camera error: "+e.message+". Allow Safari camera permission.");
+ }
+}
+function stopCamera(){
+ auto=false;
+ $("auto").textContent="Auto: OFF";
+ if(timer){clearInterval(timer);timer=null}
+ if(stream)stream.getTracks().forEach(t=>t.stop());
+ stream=null;track=null;
+ $("video").srcObject=null;
+ status("Camera stopped.");
+}
+async function initOCR(){
+ if(worker)return worker;
+ if(!window.Tesseract)throw Error("OCR library failed to load. Check internet.");
+ status("Loading OCR engine. First time may take a while...");
+ worker=await Tesseract.createWorker("eng",1,{
+  logger:m=>{
+   if(m.status==="loading language traineddata"||m.status==="initializing api")
+    status("OCR: "+m.status+" "+Math.round((m.progress||0)*100)+"%");
+  }
+ });
+ await worker.setParameters({tessedit_pageseg_mode:"6"});
+ return worker;
+}
+function parseText(text){
+ const lines=String(text).toUpperCase().split(/\n/).map(s=>s.trim()).filter(Boolean);
+ const joined=lines.join(" ");
+ let brand="";
+ if(/SAMSUNG/.test(joined))brand="SAMSUNG";
+ else if(/SAN\s*DISK|SANDISK/.test(joined))brand="SANDISK";
+ else if(/\bMICRON\b/.test(joined))brand="MICRON";
+ else if(/\bSK\s*HYNIX\b|\bHYNIX\b/.test(joined))brand="SK HYNIX";
+ else if(/\bTOSHIBA\b|\bKIOXIA\b/.test(joined))brand="KIOXIA";
+ else if(/\bINTEL\b/.test(joined))brand="INTEL";
+ else if(/\bWINBOND\b/.test(joined))brand="WINBOND";
+ else if(/\bSTMICRO\b|\bST\b/.test(joined))brand="ST";
+
+ let capacity="";
+ const cm=joined.match(/\b(\d{2,4})\s*(GB|G|TB|T)\b/);
+ if(cm)capacity=cm[1]+(cm[2]==="GB"?"G":cm[2]==="TB"?"T":cm[2]);
+
+ const candidates=[];
+ for(const line of lines){
+  const words=line.match(/[A-Z0-9][A-Z0-9\-]{3,}/g)||[];
+  for(let token of words){
+   token=normalize(token);
+   if(["SAMSUNG","SANDISK","MALAYSIA","CHINA","TAIWAN","KOREA","ARM","MICRON","HYNIX","INTEL","KIOXIA","TOSHIBA"].includes(token))continue;
+   if(/^\d{2,4}(G|GB|T|TB)$/.test(token))continue;
+   if(/^\d{4}$/.test(token)&&token!=="060681")continue;
+   if(!candidates.includes(token))candidates.push(token);
+  }
+ }
+ let part="";
+ if(brand==="SAMSUNG"){
+  part=candidates.find(x=>/^S4L[NM]/.test(x))||
+       candidates.find(x=>/^K[0-9A-Z]{6,}/.test(x))||"";
+ }else if(brand==="SANDISK"){
+  part=candidates.find(x=>/^060681$/.test(x))||
+       candidates.find(x=>/^\d{5,8}$/.test(x))||"";
+ }
+ if(!part){
+  part=candidates.find(x=>/[A-Z]/.test(x)&&/\d/.test(x)&&x.length>=6)||
+       candidates.find(x=>x.length>=5)||"";
+ }
+ return {brand,part,capacity,candidates};
+}
+function updateFields(text){
+ $("raw").textContent=text||"(No text detected)";
+ const p=parseText(text);
+ $("brand").value=p.brand;
+ $("part").value=p.part;
+ $("capacity").value=p.capacity;
+ $("verification").textContent="";
+ const area=$("suggestions");
+ area.innerHTML="";
+ if(p.candidates.length){
+  const heading=document.createElement("div");
+  heading.textContent="Possible markings (tap to select):";
+  area.appendChild(heading);
+  p.candidates.slice(0,12).forEach(v=>{
+   const b=document.createElement("button");
+   b.textContent=v;
+   b.onclick=()=>{$("part").value=v};
+   area.appendChild(b);
+  });
+ }
+ return p;
+}
+function addRecord(){
+ const brand=normalize($("brand").value);
+ const part=normalize($("part").value);
+ const capacity=normalize($("capacity").value);
+ if(!brand||!part){
+  status("Please confirm Brand and Part Number before adding.");
+  return false;
+ }
+ const r={brand,part,capacity,time:new Date().toISOString()};
+ records.push(r);
+ lastAdded=r;
+ save();
+ status("Added +1: "+brand+" "+part+(capacity?" "+capacity:""));
+ return true;
+}
+async function scan(manual=false){
+ if(busy){status("OCR is still working. Please wait.");return}
+ if(!stream){
+  status("Start Camera first.");
+  return;
+ }
+ const video=$("video");
+ if(!video.videoWidth){status("Waiting for camera image...");return}
+ busy=true;
+ $("scan").disabled=true;
+ try{
+  await initOCR();
+  status("Scanning IC markings...");
+  const canvas=$("canvas");
+  const ctx=canvas.getContext("2d",{willReadFrequently:true});
+  const w=video.videoWidth,h=video.videoHeight;
+  const cropW=Math.round(w*.82/zoomValue);
+  const cropH=Math.round(h*.50/zoomValue);
+  const sx=Math.round((w-cropW)/2),sy=Math.round((h-cropH)/2);
+  canvas.width=Math.max(100,cropW*2);
+  canvas.height=Math.max(100,cropH*2);
+  ctx.drawImage(video,sx,sy,cropW,cropH,0,0,canvas.width,canvas.height);
+  const result=await worker.recognize(canvas);
+  const text=result.data.text||"";
+  const parsed=updateFields(text);
+  status(text.trim()?"Scan completed. Check fields and press Confirm & Add +1.":"No readable text. Adjust focus and lighting.");
+
+  if(!manual&&auto){
+   const key=[parsed.brand,parsed.part,parsed.capacity].join("|");
+   if(!parsed.brand||!parsed.part){
+    emptyCount++;
+    if(emptyCount>=2){armed=true;lastText=""}
+   }else{
+    emptyCount=0;
+    // Auto mode only pre-fills fields. Confirmation prevents wrong counts.
+    if(key!==lastText){
+     lastText=key;
+     status("Auto detected: "+parsed.brand+" "+parsed.part+". Confirm to count.");
+    }
+   }
+  }
+ }catch(e){
+  status("Scan error: "+e.message);
+ }finally{
+  busy=false;
+  $("scan").disabled=false;
+ }
+}
+function setAuto(){
+ auto=!auto;
+ $("auto").textContent=auto?"Auto: ON":"Auto: OFF";
+ if(timer){clearInterval(timer);timer=null}
+ if(auto){
+  status("Auto OCR ON. Review result and press Confirm & Add +1 to count.");
+  timer=setInterval(()=>{if(!busy&&stream)scan(false)},4500);
+ }else status("Auto OCR OFF.");
+}
+async function toggleTorch(){
+ if(!track){status("Start camera first.");return}
+ try{
+  const caps=track.getCapabilities?.()||{};
+  if(!caps.torch){status("Flashlight not supported on this device/browser.");return}
+  const on=$("torch").dataset.on!=="true";
+  await track.applyConstraints({advanced:[{torch:on}]});
+  $("torch").dataset.on=String(on);
+ }catch(e){status("Flashlight unavailable: "+e.message)}
+}
+async function verifyMouser(){
+ const part=normalize($("part").value);
+ if(!part){status("Enter a part number first.");return}
+ $("verification").textContent="Checking Mouser...";
+ try{
+  const res=await fetch(WORKER+"/lookup?part="+encodeURIComponent(part));
+  if(!res.ok)throw Error("HTTP "+res.status);
+  const data=await res.json();
+  if(data.exactMatch){
+   $("verification").textContent="Mouser: Exact match found.";
+  }else if(data.found){
+   $("verification").textContent="Mouser: Similar results only. Verify marking manually.";
+  }else{
+   $("verification").textContent="Mouser: No match. You may still record the chip marking.";
+  }
+ }catch(e){
+  $("verification").textContent="Mouser unavailable: "+e.message+". Manual recording is still available.";
+ }
+}
+function exportCSV(){
+ const rows=[["Brand","Part Number / Marking","Capacity","Quantity"]];
+ const grouped=new Map();
+ records.forEach(r=>{
+  const key=[r.brand,r.part,r.capacity].join("|");
+  if(!grouped.has(key))grouped.set(key,{...r,qty:0});
+  grouped.get(key).qty++;
+ });
+ for(const r of grouped.values())rows.push([r.brand,r.part,r.capacity,r.qty]);
+ const csv="\uFEFF"+rows.map(row=>row.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(",")).join("\r\n");
+ const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+ const url=URL.createObjectURL(blob);
+ const a=document.createElement("a");
+ a.href=url;a.download="TGT_IC_Inventory.csv";
+ document.body.appendChild(a);a.click();a.remove();
+ setTimeout(()=>URL.revokeObjectURL(url),1000);
+ status("CSV export ready.");
+}
+$("start").onclick=startCamera;
+$("stop").onclick=stopCamera;
+$("scan").onclick=()=>scan(true);
+$("auto").onclick=setAuto;
+$("torch").onclick=toggleTorch;
+$("next").onclick=()=>{
+ armed=true;lastText="";emptyCount=0;
+ $("brand").value="";$("part").value="";$("capacity").value="";
+ $("raw").textContent="Ready for next chip.";
+ $("suggestions").innerHTML="";
+ status("Next chip ready. Press SCAN NOW.");
+};
+$("add").onclick=addRecord;
+$("verify").onclick=verifyMouser;
+$("export").onclick=exportCSV;
+$("undo").onclick=()=>{
+ if(!records.length)return;
+ records.pop();save();status("Last record removed.");
+};
+$("clear").onclick=()=>{
+ if(confirm("Delete ALL saved scan records?")){
+  records=[];save();status("All records cleared.");
+ }
+};
+$("zoom").oninput=e=>{zoomValue=Number(e.target.value)||1};
+render();
+</script>
+</body>
+</html>
